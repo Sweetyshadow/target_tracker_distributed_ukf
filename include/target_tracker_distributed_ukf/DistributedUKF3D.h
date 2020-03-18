@@ -179,6 +179,7 @@ namespace target_tracker_distributed_ukf {
 
 
     std::vector<double> weights;
+    std::vector<double> weights_c;
     
     
   protected:
@@ -204,7 +205,7 @@ namespace target_tracker_distributed_ukf {
             initialUncertaintyVelZ{.5},
             initialUncertaintyOffsetXY{1},
             initialUncertaintyOffsetZ{3},
-            alpha{1.1};
+            alpha{0.01};
 
     // Noises
     double  noisePosXVar{0.01},

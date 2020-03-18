@@ -109,9 +109,14 @@ void DistributedUKF3D::initializeFilter() {
   // If there is a last element, grab its frame id; if not, use default world_frame
 
   weights.resize(2 * state_size + 1);
+  weights_c.resize(2 * state_size + 1);
 
   weights[0] = lam/(double(state_size) + lam);
-  for (int i = 1; i <= 2*state_size; ++i) weights[i] = 1.0/(double(state_size) + lam)/2.0;
+  weights_c[0] = lam/(double(state_size) + lam) + (1 - pow(alpha, 2) + 2);
+  for (int i = 1; i <= 2*state_size; ++i) { 
+    weights[i] = 1.0/(double(state_size) + lam)/2.0;
+    weights_c[i] = 1.0/(double(state_size) + lam)/2.0;
+  }
   std::string frame_id{world_frame};
   if (!state_cache_.empty())
     frame_id = state_cache_.back().frame_id;
@@ -257,42 +262,17 @@ bool DistributedUKF3D::predict(const CacheElement &in, CacheElement &out) {
        0, 0, 0, 0, 0, 0, offsetDecayFactor, 0, 0,
        0, 0, 0, 0, 0, 0, 0, offsetDecayFactor, 0,
        0, 0, 0 ,0 ,0 ,0, 0, 0, offsetDecayFactor;
-  ROS_INFO_STREAM("T="<<T);
-  // ROS_INFO_STREAM("COV"<<in.cov);
-  // ROS_INFO_STREAM("IN PARTICLE"<<in.particles[4].transpose());
-  // ROS_INFO_STREAM("weight0="<<weights[0]);
-  // ROS_INFO_STREAM("weight1="<<weights[1]);
+  // ROS_INFO_STREAM("T="<<T);
   for (int i = 0; i < 2 * in.state_size + 1; ++i){
     out.particles[i] = T * in.particles[i];
-    // ROS_INFO_STREAM("particles"<<i<<"  "<<in.particles[i].transpose());
-    // ROS_INFO_STREAM("particles"<<i<<"  "<<out.particles[i].transpose());
-  // Decreasing velocity model
-  // out.particles[i](0) = in.particles[i](0) + in.particles[i](3) * velocityIntegralFactor;
-  // out.particles[i](1) = in.particles[i](1) + in.particles[i](4) * velocityIntegralFactor;
-  // out.particles[i](2) = in.particles[i](2) + in.particles[i](5) * velocityIntegralFactor;
-
-  // out.particles[i](3) = in.particles[i](3) * velocityDecayFactor;
-  // out.particles[i](4) = in.particles[i](4) * velocityDecayFactor;
-  // out.particles[i](5) = in.particles[i](5) * velocityDecayFactor;
-
-  
-  // //const double offsetIntegralFactor = (offsetDecayFactor - 1)/log(offsetDecayAlpha);
-
-  // out.particles[i](6) = in.particles[i](6) * offsetDecayFactor;
-  // out.particles[i](7) = in.particles[i](7) * offsetDecayFactor;
-  // out.particles[i](8) = in.particles[i](8) * offsetDecayFactor;
   }
-
-  // Construct jacobian G based on deltaT
-  // MatrixXd G((int) state_size, (int) state_size);
-  // populateJacobianG(G, deltaT);
 
   // Update covariance from one to next
   
   out.state = VectorXd::Zero(in.state_size);
   for(int i = 0; i < 2*state_size + 1; ++i) out.state += weights[i]*out.particles[i];
   out.cov = MatrixXd::Zero(in.state_size, in.state_size);
-  for(int i = 0; i < 2*state_size + 1; ++i) out.cov += weights[i]*(out.particles[i] - out.state)*((out.particles[i] - out.state).transpose());
+  for(int i = 0; i < 2*state_size + 1; ++i) out.cov += weights_c[i]*(out.particles[i] - out.state)*((out.particles[i] - out.state).transpose());
   out.cov += R;
   MatrixXd sqrt_cov(in.state_size, in.state_size);
   sqrt_cov = out.cov.llt().matrixL();
@@ -371,17 +351,17 @@ bool DistributedUKF3D::update(CacheElement &elem) {
   }
   // ROS_INFO_STREAM("z_miu"<<z_miu.transpose());
   for (int i = 0; i < 2*state_size+1;++i)
-    S += weights[i] * (z_particles[i] - z_miu) * ((z_particles[i] - z_miu).transpose());
+    S += weights_c[i] * (z_particles[i] - z_miu) * ((z_particles[i] - z_miu).transpose());
   
   S += Q;
   // ROS_INFO_STREAM("S="<<S);
   // ROS_INFO_STREAM("Q="<<Q);
   MatrixXd cov_xz = MatrixXd::Zero(state_size, measurement_state_size);
-  for(int i = 0; i < state_size; ++i)
-    cov_xz += weights[i] * (elem.particles[i] - elem.state) * ((z_particles[i] - z_miu).transpose());
-  ROS_INFO_STREAM("cov_xz="<<cov_xz);
+  for(int i = 0; i < 2*state_size+1; ++i)
+    cov_xz += weights_c[i] * (elem.particles[i] - elem.state) * ((z_particles[i] - z_miu).transpose());
+  // ROS_INFO_STREAM("cov_xz="<<cov_xz);
   MatrixXd K = cov_xz * S.inverse();
-  ROS_INFO_STREAM("K="<<K);
+  // ROS_INFO_STREAM("K="<<K);
   
 
   // MatrixXd K = elem.cov * H.transpose() * (H * elem.cov * H.transpose() + Q).inverse();
@@ -396,16 +376,17 @@ bool DistributedUKF3D::update(CacheElement &elem) {
 
   e_measurement
       << closest_measurement->pose.position.x, closest_measurement->pose.position.y, closest_measurement->pose.position.z, measured_offset_x, measured_offset_y, measured_offset_z;
-  ROS_INFO_STREAM("e_measurement"<<e_measurement.transpose());
-  ROS_INFO_STREAM("z_miu="<<z_miu);
+  // ROS_INFO_STREAM("e_measurement"<<e_measurement.transpose());
+  // ROS_INFO_STREAM("z_miu="<<z_miu);
   // VectorXd e_predicted((int) measurement_state_size);
   // e_predicted << elem.state(0), elem.state(1), elem.state(2), elem.state(6), elem.state(7), elem.state(8);
 
   // Update
   elem.state = elem.state + K * (e_measurement - z_miu);
-  ROS_INFO_STREAM("elem.state"<<elem.state.transpose());
+  // ROS_INFO_STREAM("state error"<<e_measurement(0)-elem.state(0)<<"  "<<e_measurement(1)-elem.state(1)<<"  "<<e_measurement(2)-elem.state(2));
+  // ROS_INFO_STREAM("elem.state"<<elem.state.transpose());
   elem.cov = elem.cov - K * S * K.transpose();
-  ROS_INFO_STREAM("elem.cov="<<elem.cov);
+  // ROS_INFO_STREAM("elem.cov="<<elem.cov);
   MatrixXd sqrt_cov = MatrixXd::Zero(state_size, state_size);
   sqrt_cov = elem.cov.llt().matrixL();
   elem.particles[0] = elem.state;
@@ -471,28 +452,6 @@ void DistributedUKF3D::initializeStaticMatrices() {
       , 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, noiseOffZVar;
 }
 
-// void DistributedUKF3D::populateJacobianG(MatrixXd &G, const double deltaT) {
-//   // offset assumed independent from target detection
-//   G << 1.0, 0.0, 0.0, deltaT, 0.0, 0.0, 0.0, 0.0, 0.0
-//       , 0.0, 1.0, 0.0, 0.0, deltaT, 0.0, 0.0, 0.0, 0.0
-//       , 0.0, 0.0, 1.0, 0.0, 0.0, deltaT, 0.0, 0.0, 0.0
-//       , 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0
-//       , 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0
-//       , 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0
-//       , 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0
-//       , 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0
-//       , 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0;
-// }
-
-// void DistributedUKF3D::populateJacobianQ(MatrixXd &Q, const PoseWithCovariance &pcov) {
-
-//   Q << pcov.covariance[0], pcov.covariance[1], pcov.covariance[2], 0.0, 0.0, 0.0
-//       , pcov.covariance[6], pcov.covariance[7], pcov.covariance[8], 0.0, 0.0, 0.0
-//       , pcov.covariance[12], pcov.covariance[13], pcov.covariance[14], 0.0, 0.0, 0.0
-//       , 0.0, 0.0, 0.0, pcov.covariance[0], pcov.covariance[1], pcov.covariance[2]
-//       , 0.0, 0.0, 0.0, pcov.covariance[6], pcov.covariance[7], pcov.covariance[8]
-//       , 0.0, 0.0, 0.0, pcov.covariance[12], pcov.covariance[13], pcov.covariance[14];
-// }
 
 void DistributedUKF3D::publishStateAndCov(const CacheElement &elem) {
 

@@ -15,4 +15,4 @@ initialUncertaintyVelXY: 1.0
 initialUncertaintyVelZ: 0.5
 initialUncertaintyOffsetXY: 1.0
 initialUncertaintyOffsetZ: 3.0
-alpha: 1.1
+alpha: 0.01
